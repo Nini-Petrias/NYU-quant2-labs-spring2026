@@ -1,4 +1,4 @@
-### POL-GA Intro to Quantitative Political Analysis II Spring 2025
+### POL-GA Intro to Quantitative Political Analysis II Spring 2026
 
 Materials for the lab component of POL-GA 1251 Intro to Quantitative Political Analysis II (Spring 2026) can be found here. 
 
