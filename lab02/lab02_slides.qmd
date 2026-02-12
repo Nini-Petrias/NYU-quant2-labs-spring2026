@@ -1,0 +1,465 @@
+---
+title: Quant II
+subtitle: Lab 2
+author: Yinxuan Wang
+date: '2026-02-12'
+format:
+  beamer:
+    theme: CambridgeUS
+    colortheme: dolphin
+    fonttheme: structurebold
+    incremental: false
+---
+
+# Homework 1
+
+- Homework 1 due February 16 before class
+- Email to **both** Cyrus \& me
+- Send one PDF, including math, code, and output 
+- Math part can be scanned and attached (or from tablet)\newline LaTeX recommended
+
+
+# Today's Agenda
+- Robust standard errors
+- Cluster robust standard errors
+- Bootstrap
+
+
+# Robust Variance Estimators
+
+- 	From lecture, asymptotic variance of OLS under unit-level sampling
+$$
+V= \mathbb{E}[X_iX_i']^{-1}\, \mathbb{E}[X_iX_i'\varepsilon_i^2]\, \mathbb{E}[X_iX_i']^{-1}
+$$
+
+. . . 
+
+- A general form of estimators for the asymptotic variance:
+$$\hat{V}(\hat{\mathbf{\beta}}) = (\mathbf{X}'\mathbf{X})^{-1}\mathbf{X}'\hat{\Psi}\mathbf{X}(\mathbf{X}'\mathbf{X})^{-1}$$
+- Where $\hat{\Psi}$ is an estimator of $plim [\varepsilon \varepsilon']$
+
+. . . 
+
+- These estimators are "robust" because they don't require specific distributional assumptions
+
+
+# Robust Variance Estimators
+
+From \textit{Mostly Harmless Econometrics}, Ch.8.
+
+> - HC0: $\hat{\psi}_i = \hat{e_i}^2$
+> - HC1: $\hat{\psi}_i = \frac{n}{n-k}\hat{e_i}^2$
+> - HC2: $\hat{\psi} = \frac{1}{1-h_{ii}}\hat{e_i}^2$, where $h_{ii}$ is the *leverage* of unit $i$ (the influence of $i$ on the regression line)
+> - HC3: $\hat{\psi} = \frac{1}{(1-h_{ii})^2}\hat{e_i}^2$
+
+
+# Linear Regression in R
+- In base R, `lm()` implements the OLS estimation
+    -   Fit the model 
+    -   Then use functions in the package `sandwich` for robust SEs
+
+. . .
+
+- With packages `estimatr`, `lfe`, or `fixest`
+    - Specify the SE estimator from inside the function
+
+. . . 
+
+- Check the function documentation to see what SEs are computed
+
+# Robust Standard Errors in R, i
+\small
+```{r}
+#| echo: true
+
+set.seed(123)
+pacman::p_load(tidyverse, estimatr, sandwich, lmtest)
+
+# simulate population
+pop <- data.frame(Y1 = rnorm(1000, 4, 2), Y0 = rnorm(1000, 0.5, 3))
+
+# random sample
+sample <- pop[sample(nrow(pop), 100),]
+sample$D <- 0
+sample$D[sample(100, 30)] <- 1
+
+# observed potential outcomes
+sample <- sample %>% mutate(Y = D*Y1 + (1-D)*Y0)
+```
+
+
+# Robust Standard Errors in R, ii
+\footnotesize
+```{r}
+#| echo: true
+### Example 1: lm_robust 
+# Default: HC2 estimator
+lm_robust(Y ~ D, data = sample)
+
+# HC1
+lm_robust(Y ~ D, data = sample, se_type = "HC1")
+# or 
+lm_robust(Y ~ D, data = sample, se_type = "stata")
+```
+# Robust Standard Errors in R, iii
+\tiny
+```{r}
+#| echo: true
+### Example 2: lm + lmtest + sandwich 
+fit <- lm(Y ~ D, data = sample)
+summary(fit) # Default is homoskedastic
+N <- nrow(sample)
+D <- cbind(rep(1, N), sample$D)
+K <- dim(D)[2]
+vcov <- solve((t(D) %*% D)) %*% t(D) %*% diag((sum(residuals(fit)^2)/(N-K)), N, N) %*% D %*% solve((t(D) %*% D))
+cbind(coef(fit), sqrt(diag(vcov)))
+```
+
+# Robust Standard Errors in R, iv
+\footnotesize
+```{r}
+#| echo: true
+coeftest(fit, vcov = vcovHC(fit, type = "HC1"))
+coeftest(fit, vcov = vcovHC(fit, type = "HC2"))
+```
+
+# Export Regression Output in Tables - `stargazer`
+\footnotesize
+```{r}
+#| echo: true
+pacman::p_load(stargazer)
+stargazer(fit, type = "text")
+```
+
+# Export Regression Output in Tables - `modelsummary`
+\footnotesize
+```{r}
+#| echo: true
+pacman::p_load(modelsummary)
+modelsummary(list(fit, fit), 
+             vcov=list("HC1", "HC2"), 
+             output = "markdown", gof_omit = "^(?!R2|Num)")
+```
+
+# Export Regression Output in Tables - `fixest::etable`
+\footnotesize
+```{r}
+#| echo: true
+pacman::p_load(fixest)
+fix <- list(feols(Y ~ D, sample, vcov="iid"),
+            feols(Y ~ D, sample, vcov="HC1"))
+fix %>% etable()
+```
+
+# Clustering
+- Clustered **sampling**
+   - For instance, we sample villages or electoral precincts: individual behavior (e.g. voting) is correlated within cluster
+
+. . . 
+
+- Clustered **treatment assignment** 
+   - For instance, we randomize a treatment at the housing block level, assignment is correlated within cluster
+   
+. . . 
+
+- In both cases, relative to simple random process, units are contributing less information
+- If we treat units as independent
+  - we overstate the information in the data
+  - and underestimate the variance of the estimator
+  
+# Level of Clustering
+A guide to empirical practice - 
+[MacKinnon, Nielsen, and Webb (\textit{JE}, 2023)](https://www.sciencedirect.com/science/article/pii/S0304407622000781)
+
+- In observational work we do not perfectly observe the cluster structure
+
+- ``How do you cluster SEs?''
+
+- Traditional rules of thumb:
+  - When in doubt, cluster at the highest possible level
+  - Choose the level which gives the highest SEs
+  
+- DiD setting: cluster at the unit level
+  - Can also cluster in two dimensions if suspects of correlation along other dimensions
+
+- If treatment is assigned at a higher level: cluster at that level 
+  - E.g. individual-level data, geographic distances at place level
+
+# Cluster Simulation
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-width: 8
+#| fig-height: 4
+
+make_clustered_data <- function(G, N) {
+    g <- sample(1:G, size = N, replace = T)
+    treat.g <- sample(c(0, 1), size = G, replace = T)
+    while (is.na(sd(treat.g))) {
+        treat.g <- sample(c(0, 1), size = G, replace = T)
+    }
+    treat.i <- sapply(g, \(x) treat.g[x])
+    effect.g <- rnorm(1:G)
+    g.i <- sapply(g, \(x) effect.g[x])
+    y <- rnorm(N) + g.i + 0.5 * treat.i
+    data.frame(
+        g = g,
+        treat = treat.i,
+        y = y
+    )
+}
+
+set.seed(123)
+df <- make_clustered_data(G = 10, N = 200)
+
+df$g <- factor(df$g)  # discrete x-axis
+
+pacman::p_load(ggplot2)
+
+ggplot(df, aes(x = factor(g), y = y, color = factor(treat), shape = factor(treat))) +
+  geom_point(position = position_jitter(width = 0.12), size = 2.2, alpha = 0.75) +
+  scale_color_manual(
+    values = c("0" = "#0072B2", "1" = "#D55E00"),
+    labels = c("Control", "Treated")
+  ) +
+  scale_shape_manual(
+    values = c("0" = 16, "1" = 17),
+    labels = c("Control", "Treated")
+  ) + 
+  labs(x = "Cluster", y = "Outcome", color = NULL, shape = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    panel.grid.minor = element_blank()
+  )
+```
+  
+  
+# Cluster Simulation, ii
+\footnotesize
+```{r}
+#| echo: true
+set.seed(123)
+make_sim <- function(x) {
+    df <- make_clustered_data(G = 10, N = 200)
+    model <- summary(lm(y ~ treat, data = df))$coefficients["treat", ]
+    model
+}
+res <- map(1:100, make_sim) %>%
+    bind_rows() %>%
+    mutate(
+        lo = Estimate - 1.96 * `Std. Error`,
+        hi = Estimate + 1.96 * `Std. Error`,
+        cover = lo < 0.5 & hi > 0.5,
+        i = 1:100
+    )
+```
+
+# Cluster Simulation, iii
+ 
+> - Only `r sum(res$cover)`% cover the true value
+
+```{r}
+#| echo: false
+#| fig-width: 8
+#| fig-height: 4
+res %>%
+  mutate(cover = factor(cover, levels = c(FALSE, TRUE),
+                        labels = c("Miss", "Cover"))) %>% 
+  ggplot(aes(x = reorder(i, Estimate), y = Estimate, ymin = lo, ymax = hi, color = cover)) +
+    geom_hline(yintercept = 0.5, lty = 2) +
+    geom_point() +
+    geom_errorbar(width = 0) + 
+    scale_color_manual(values = c("Miss" = "#D55E00", "Cover" = "#0072B2")) +
+labs(x = "", y = "Estimate") +
+theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_blank()
+  )
+```
+
+
+# Cluster Simulation - Clustered SEs
+- `lm` + `sandwich`
+- `lfe::felm`
+- `fixest::feols`
+
+\footnotesize
+```{r}
+#| echo: true
+set.seed(123)
+make_sim_clustered <- function(x) {
+  df <- make_clustered_data(G = 10, N = 200)
+  m  <- feols(y ~ treat, data = df, cluster = ~ g)
+
+  ct <- coeftable(m)
+  out <- ct["treat", c("Estimate", "Std. Error")]
+  tibble(Estimate = out[1], `Std. Error` = out[2])
+}
+```
+
+# Cluster Simulation - Clustered SEs, ii
+```{r}
+#| echo: false
+#| fig-width: 8
+#| fig-height: 4
+res_cl <- map_dfr(1:100, make_sim_clustered) %>%
+  mutate(
+    lo = Estimate - 1.96 * `Std. Error`,
+    hi = Estimate + 1.96 * `Std. Error`,
+    cover = lo < 0.5 & hi > 0.5,
+    i = row_number(),
+    significant = lo < 0 | hi > 0, 
+  )
+```
+
+- `r sum(res_cl$cover)`% cover the true value
+
+```{r}
+#| echo: false
+#| fig-width: 8
+#| fig-height: 4
+res_cl %>%
+  mutate(cover = factor(cover, levels = c(FALSE, TRUE),
+                        labels = c("Miss", "Cover"))) %>% 
+  ggplot(aes(x = reorder(i, Estimate), y = Estimate, ymin = lo, ymax = hi, color = cover)) +
+  geom_hline(yintercept = 0.5, lty = 2) +
+  geom_errorbar(width = 0) +
+  geom_point()  + 
+  scale_color_manual(values = c("Miss" = "#D55E00", "Cover" = "#0072B2")) +
+  labs(x = NULL, y = "Estimate (clustered SE)") +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+
+# Bootstrapping
+- Simulate sampling distributions (from repeated random sampling) using the available sample
+- Parametric, Semi-parametric, Non-parametric
+- **Non-parametric**: based on re-sampling 
+- Random re-sampling from the sample approximates random sampling from the population
+- The sampling distribution of statistics from re-samples approximates the true sampling distribution
+
+# Vanilla Non-parametric Bootstrapping
+1. From our sample of size $N$, draw a random sample of size $N$ with replacement
+2. On this sample, compute the estimate
+3. Repeat many times (e.g. 1000)
+4. Obtain a distribution of estimates from the resamples (a bootstrapped sampling distribution)
+5. For inference, compute moments of the bootstrapped distribution
+
+# Vanilla Non-parametric Bootstrapping
+![](bootstrap-scheme.png)
+
+# Cluster Simulation, Bootstrapping
+```{r}
+#| echo: true
+set.seed(123)
+df <- make_clustered_data(G = 30, N = 500)
+n_clusters <- length(unique(df$g))
+```
+
+# Cluster Simulation, Vanilla Unit-level Bootstrap
+Let's try to bootstrap SEs for $\beta_{treat}$
+
+. . . 
+
+\footnotesize
+
+
+```{r}
+#| echo: true
+vanilla_bootstrap <- function(a) {
+    resampled.data <- df %>% sample_frac(1, replace = T)
+    broom::tidy(lm(y ~ treat, data = resampled.data)) %>% 
+      dplyr::filter(term == "treat")
+}
+vb.results <- map(1:1000, vanilla_bootstrap) %>%
+    bind_rows()
+sd(vb.results$estimate)
+```
+
+. . . 
+
+```{r}
+#| echo: true
+tidy(summary(lm(y ~ treat, data = df)))
+```
+
+
+# Cluster Simulation, Vanilla Cluster Bootstrap
+- Bootstrap procedure with clustered data needs to reflect the clustered structure 
+- Let's resample at the **cluster** level
+
+. . . 
+
+\tiny
+```{r}
+#| echo: true
+get_cluster_bs_sample <- function(df) {
+  clusters <- unique(df$g)
+  sampled_clusters <- sample(clusters, size = n_clusters, replace = TRUE)
+  dplyr::bind_rows(lapply(sampled_clusters, function(cl) df[df$g == cl, ]))
+}
+
+estimates <- purrr::map_dbl(1:1000, function(b) {
+  boot_df <- get_cluster_bs_sample(df)
+  coef(lm(y ~ treat, data = boot_df))["treat"]
+})
+
+sd(estimates)
+
+tidy(summary(feols(y ~ treat,data =df,cluster =~ g)))
+```
+
+# Wild Cluster Bootstrap-$t$
+
+Let's not draw conventional bootstrap samples
+
+Instead, 
+
+> - Fit the unrestricted model, estimate $\hat{\beta}$ and $t$
+> - Fit the restricted model, obtain residuals
+> - **Randomize the sign of the residual** at the **cluster level** (Rademacher weights)
+> - Construct $Y^\star_b$ as restricted fitted values + randomized residuals
+> - Estimate $\hat{\beta}_b$
+> - Compute $t$-statistic, $t_b$, for the new estimate
+> - Do this `N_boot` times
+> - Compute bootstrap p-values by counting the share of simulated $t_b$ to the left/right of the observed $t$
+
+
+# Cluster Simulation, Wild Cluster Bootstrap-$t$
+\tiny
+```{r}
+#| echo: true
+pacman::p_load(fwildclusterboot)
+# install.packages(c("dqrng", "collapse", "JuliaConnectoR", "gtools"))
+
+feols_fit <- feols(y ~ treat, data = df)
+boot <- fwildclusterboot::boottest(
+  feols_fit,
+  clustid = "g",
+  param   = "treat",
+  B       = 9999,
+  type    = "rademacher",
+  conf_int = TRUE,
+  sign_level = 0.05
+)
+summary(boot)
+```
+# R Packages for Bootstrapping
+
+- `boot`
+
+- `ClusterBootstrap` - bootstrapping on hierarchically structured data
+
+- `fwildclusterboot` - wild cluster bootstrap
+
+- `multiwaycov::cluster.boot` for post-estimation SE calculation
